@@ -5,17 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"time"
 	"websocket/internal/ws"
 )
 
 func main() {
-	openConnections := 0
-
-	http.HandleFunc("/active-ws-connections", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(fmt.Sprintf("%d", openConnections)))
-	})
-
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		upgrader := ws.NewUpgrader(ws.UpgraderConfiguration{})
 		conn, err := upgrader.Upgrade(w, r)
@@ -25,38 +18,25 @@ func main() {
 			return
 		}
 
-		openConnections++
-
 		for {
-			go func() {
-				defer func() {
-					openConnections--
-				}()
+			err := conn.ReadMessage(func(data []byte) {
+				fmt.Println(string(data))
+			})
 
-				for {
-					err := conn.ReadMessage(func(data []byte) {
-						fmt.Println(string(data))
-					})
-
-					if err != nil {
-						var ce *ws.CloseError
-						if ok := errors.As(err, &ce); ok {
-							fmt.Println(ce.Error())
-						}
-						log.Println(err)
-						return
-					}
-					err = conn.WriteMessage([]byte("Hello"))
-
-					if err != nil {
-						log.Println("err", err)
-						return
-					}
+			if err != nil {
+				var ce *ws.CloseError
+				if ok := errors.As(err, &ce); ok {
+					fmt.Println(ce.Error())
 				}
-			}()
+				log.Println(err)
+				return
+			}
+			err = conn.WriteMessage([]byte("Hello"))
 
-			time.Sleep(time.Minute * 5)
-			return
+			if err != nil {
+				log.Println("err", err)
+				return
+			}
 		}
 	})
 

@@ -40,6 +40,10 @@ func (conn *Conn) Close() error {
 	return conn.Conn.Close()
 }
 
+/*
+ReadMessage reads data from the connection and calls the callback function with the data.
+If the connection is closed, it will return a CloseError.
+*/
 func (conn *Conn) ReadMessage(cb func(data []byte)) error {
 	data, err := conn.readFromConn()
 	if err != nil {
