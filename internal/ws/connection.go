@@ -1,7 +1,6 @@
 package ws
 
 import (
-	"bytes"
 	"net"
 	"websocket/internal/parser"
 )
@@ -14,28 +13,6 @@ type ConnectionState struct {
 	Open bool
 }
 
-func (conn *Conn) readFromConn() ([]byte, error) {
-	chunkLength := 1024
-	chunk := make([]byte, chunkLength)
-	data := bytes.NewBuffer(make([]byte, 0))
-
-	for {
-		n, err := conn.Conn.Read(chunk)
-
-		if err != nil {
-			return nil, err
-		}
-
-		data.Write(chunk[:n])
-
-		if n != chunkLength {
-			break
-		}
-	}
-
-	return data.Bytes(), nil
-}
-
 func (conn *Conn) Close() error {
 	return conn.Conn.Close()
 }
@@ -45,13 +22,13 @@ ReadMessage reads data from the connection and calls the callback function with 
 If the connection is closed, it will return a CloseError.
 */
 func (conn *Conn) ReadMessage(cb func(data []byte)) error {
-	data, err := conn.readFromConn()
-	if err != nil {
-		return err
-	}
-	payload := parser.ParseInputData(data)
+	payload, err := parser.ParseFrame(conn.Conn)
 
-	if payload.Disconnected {
+	if err != nil {
+		return &CloseError{Reason: "Error in parsing data."}
+	}
+
+	if payload.ClientDisconnected {
 		err := conn.Close()
 		if err != nil {
 			return &CloseError{Reason: "Error in closing connection."}

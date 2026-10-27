@@ -31,14 +31,8 @@ func main() {
 				log.Println(err)
 				return
 			}
-			err = conn.WriteMessage([]byte("Hello"))
-
-			if err != nil {
-				log.Println("err", err)
-				return
-			}
 		}
 	})
 
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	log.Fatal(http.ListenAndServe(":13373", nil))
 }

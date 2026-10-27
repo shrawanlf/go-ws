@@ -3,79 +3,102 @@ package parser
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 )
 
 type WsInputPayload struct {
-	Length       int
-	OpCode       []byte
-	Disconnected bool
-	Masked       bool
-	MaskKey      []byte
-	Data         []byte
+	Length int
+	OpCode byte
+	// if fin is true, this is the final fragment of the websocket message
+	Fin                bool
+	ClientDisconnected bool
+	Masked             bool
+	MaskKey            []byte
+	Data               []byte
+}
+
+func readTill(reader io.Reader, len int) ([]byte, error) {
+	buf := make([]byte, len)
+	_, err := reader.Read(buf)
+	return buf, err
 }
 
 /**
 * Parses the data into a WsInputPayload
  * data: the data to parse in []byte
 */
-func ParseInputData(data []byte) *WsInputPayload {
-	readIdx := int8(0)
-
-	//zeroth byte (first one, metadata)
-	//no use of these values for now
+func ParseFrame(reader io.Reader) (*WsInputPayload, error) {
+	//zeroth byte (fin, rsv1, rsv2, rsv3, opCode)
 	payload := &WsInputPayload{}
-	firstByte := data[readIdx]
-	fin := (firstByte >> 7) & 0x01
-	rsv1 := (firstByte >> 6) & 0x01
-	rsv2 := (firstByte >> 5) & 0x01
-	rsv3 := (firstByte >> 4) & 0x01
 
-	opCode := firstByte & 0x0f
-
-	if opCode == 0x08 {
-		payload.Disconnected = true
-		return payload
+	firstByte, err := readTill(reader, 1)
+	if err != nil {
+		return nil, err
 	}
 
-	fmt.Println(fin, rsv1, rsv2, rsv3, opCode)
+	fin := (firstByte[0] >> 7) & 0x01
+	payload.Fin = fin == 0
+	rsv1 := (firstByte[0] >> 6) & 0x01
+	rsv2 := (firstByte[0] >> 5) & 0x01
+	rsv3 := (firstByte[0] >> 4) & 0x01
 
-	readIdx += 1
+	opCode := firstByte[0] & 0x0f
+	payload.OpCode = opCode
+
+	if opCode == 0x08 {
+		payload.ClientDisconnected = true
+		return payload, nil
+	}
+
+	fmt.Println(rsv1, rsv2, rsv3, opCode)
 
 	// second byte (masked check and length data)
 	// up to the 10th byte for bigger length -> upto 64 bits
-	secondByte := data[readIdx]
-	mask := (secondByte >> 7) & 0x01
+	secondByte, err := readTill(reader, 1)
+	if err != nil {
+		return nil, err
+	}
+	mask := (secondByte[0] >> 7) & 0x01
 	payload.Masked = mask != 0
-	length := secondByte & 0x7f
-
-	readIdx += 1
+	length := secondByte[0] & 0x7f
 
 	// bigger payload lengths
 	if length <= 125 {
 		payload.Length = int(length)
 	} else if length == 126 {
-		payload.Length = int(binary.BigEndian.Uint16(data[2:4]))
-		readIdx += 2
+		dat, err := readTill(reader, 2)
+		if err != nil {
+			return nil, err
+		}
+		payload.Length = int(binary.BigEndian.Uint16(dat))
 	} else if length == 127 {
-		payload.Length = int(binary.BigEndian.Uint64(data[2:10]))
-		readIdx += 8
+		dat, err := readTill(reader, 8)
+		if err != nil {
+			return nil, err
+		}
+		payload.Length = int(binary.BigEndian.Uint64(dat))
 	}
 
 	//11th byte (mask key)
 	if payload.Masked {
-		maskKey := data[readIdx : readIdx+4]
+		maskKey, err := readTill(reader, 4)
+		if err != nil {
+			return nil, err
+		}
 		payload.MaskKey = maskKey
-		readIdx += 4
 	}
 
 	payloadData := make([]byte, payload.Length)
-	remainingPayload := data[readIdx:]
+	remainingPayload, err := readTill(reader, payload.Length)
+
+	if err != nil {
+		return nil, err
+	}
 
 	for i := 0; i < payload.Length; i++ {
 		payloadData[i] = remainingPayload[i] ^ payload.MaskKey[i&0x03]
 	}
 
 	payload.Data = payloadData
-
-	return payload
+	return payload, nil
 }
