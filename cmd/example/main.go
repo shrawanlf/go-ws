@@ -5,13 +5,24 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"websocket/internal/ws"
+	ws "websocket"
 )
 
 func main() {
+	openConnections := 0
+
+	http.HandleFunc("/oc", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fmt.Sprintf("%d", openConnections)))
+	})
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		openConnections++
 		upgrader := ws.NewUpgrader(ws.UpgraderConfiguration{})
 		conn, err := upgrader.Upgrade(w, r)
+
+		defer func() {
+			openConnections--
+		}()
 
 		if err != nil {
 			log.Println(err)
@@ -20,7 +31,7 @@ func main() {
 
 		for {
 			err := conn.ReadMessage(func(data []byte) {
-				fmt.Println(string(data))
+				fmt.Println("data", string(data))
 			})
 
 			if err != nil {

@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-type Ws struct {
+type ws struct {
 	conn    net.Conn
 	bufioRw bufio.ReadWriter
 	header  http.Header
@@ -25,7 +25,7 @@ func NewUpgrader(conf UpgraderConfiguration) *upgrader {
 	return &upgrader{}
 }
 
-func (ws *upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, error) {
+func (ws *upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (*connection, error) {
 	newWs, err := newWebsocket(w, r)
 
 	if err != nil {
@@ -38,12 +38,12 @@ func (ws *upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (*Conn, erro
 		return nil, err
 	}
 
-	conn := &Conn{Conn: newWs.conn}
+	conn := &connection{conn: newWs.conn}
 
 	return conn, nil
 }
 
-func newWebsocket(w http.ResponseWriter, r *http.Request) (*Ws, error) {
+func newWebsocket(w http.ResponseWriter, r *http.Request) (*ws, error) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		return nil, fmt.Errorf("no support for hijacking")
@@ -55,7 +55,7 @@ func newWebsocket(w http.ResponseWriter, r *http.Request) (*Ws, error) {
 		return nil, error
 	}
 
-	return &Ws{conn: conn, bufioRw: *bufioRw, header: r.Header}, nil
+	return &ws{conn: conn, bufioRw: *bufioRw, header: r.Header}, nil
 }
 
 func getAcceptHash(key string) string {
@@ -65,7 +65,7 @@ func getAcceptHash(key string) string {
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
-func (ws *Ws) handshake() error {
+func (ws *ws) handshake() error {
 	hash := getAcceptHash(ws.header.Get("Sec-WebSocket-Key"))
 	lines := []string{
 		"HTTP/1.1 101 Web Socket Protocol Handshake",

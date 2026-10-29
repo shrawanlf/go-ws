@@ -1,12 +1,50 @@
-package parser
+package ws
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
 )
 
-type WsInputPayload struct {
+func writeData(data []byte) ([]byte, error) {
+	out := bytes.NewBuffer(nil)
+	firstByte := byte(0)
+	// FIN, RSV1, RSV2, RSV3 are not set for now, defaults to 0
+	firstByte = firstByte | (1 << 7)
+
+	// OPCODE
+	firstByte = firstByte | (1 << 0)
+
+	out.WriteByte(firstByte)
+
+	// LENGTH
+	length := len(data)
+
+	if length <= 125 {
+		out.WriteByte(0 | byte(length))
+	} else if length >= 126 && length <= 65535 {
+		out.WriteByte(0 | byte(126))
+		err := binary.Write(out, binary.BigEndian, uint16(length))
+		if err != nil {
+			return nil, err
+		}
+	} else if length >= 65536 {
+		out.WriteByte(0 | byte(127))
+		err := binary.Write(out, binary.BigEndian, uint64(length))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// skip masking key, writing data should not have a masking key
+
+	binary.Write(out, binary.BigEndian, data)
+
+	return out.Bytes(), nil
+}
+
+type wsInputPayload struct {
 	Length int
 	OpCode byte
 	// if fin is true, this is the final fragment of the websocket message
@@ -17,19 +55,13 @@ type WsInputPayload struct {
 	Data               []byte
 }
 
-func readTill(reader io.Reader, len int) ([]byte, error) {
-	buf := make([]byte, len)
-	_, err := reader.Read(buf)
-	return buf, err
-}
-
 /**
-* Parses the data into a WsInputPayload
+* Parses the data into a wsInputPayload
  * data: the data to parse in []byte
 */
-func ParseFrame(reader io.Reader) (*WsInputPayload, error) {
+func parseFrame(reader io.Reader) (*wsInputPayload, error) {
 	//zeroth byte (fin, rsv1, rsv2, rsv3, opCode)
-	payload := &WsInputPayload{}
+	payload := &wsInputPayload{}
 
 	firstByte, err := readTill(reader, 1)
 	if err != nil {
@@ -37,7 +69,7 @@ func ParseFrame(reader io.Reader) (*WsInputPayload, error) {
 	}
 
 	fin := (firstByte[0] >> 7) & 0x01
-	payload.Fin = fin == 0
+	payload.Fin = fin == 1
 	rsv1 := (firstByte[0] >> 6) & 0x01
 	rsv2 := (firstByte[0] >> 5) & 0x01
 	rsv3 := (firstByte[0] >> 4) & 0x01
@@ -50,7 +82,7 @@ func ParseFrame(reader io.Reader) (*WsInputPayload, error) {
 		return payload, nil
 	}
 
-	fmt.Println(rsv1, rsv2, rsv3, opCode)
+	fmt.Println(fin, rsv1, rsv2, rsv3, opCode)
 
 	// second byte (masked check and length data)
 	// up to the 10th byte for bigger length -> upto 64 bits
