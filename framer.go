@@ -7,7 +7,12 @@ import (
 	"io"
 )
 
-func writeData(data []byte) ([]byte, error) {
+type prepareWriteFrameArgs struct {
+	data    []byte
+	maskKey []byte
+}
+
+func prepareWriteFrame(args prepareWriteFrameArgs) ([]byte, error) {
 	out := bytes.NewBuffer(nil)
 	firstByte := byte(0)
 	// FIN, RSV1, RSV2, RSV3 are not set for now, defaults to 0
@@ -18,28 +23,36 @@ func writeData(data []byte) ([]byte, error) {
 
 	out.WriteByte(firstByte)
 
+	firstByte = byte(0)
+
+	if args.maskKey != nil {
+		firstByte = firstByte | (1 << 7)
+	}
+
 	// LENGTH
-	length := len(data)
+	length := len(args.data)
 
 	if length <= 125 {
-		out.WriteByte(0 | byte(length))
+		out.WriteByte(firstByte | byte(length))
 	} else if length >= 126 && length <= 65535 {
-		out.WriteByte(0 | byte(126))
+		out.WriteByte(firstByte | byte(126))
 		err := binary.Write(out, binary.BigEndian, uint16(length))
 		if err != nil {
 			return nil, err
 		}
 	} else if length >= 65536 {
-		out.WriteByte(0 | byte(127))
+		out.WriteByte(firstByte | byte(127))
 		err := binary.Write(out, binary.BigEndian, uint64(length))
 		if err != nil {
 			return nil, err
 		}
 	}
 
+	binary.Write(out, binary.BigEndian, args.maskKey)
+
 	// skip masking key, writing data should not have a masking key
 
-	binary.Write(out, binary.BigEndian, data)
+	binary.Write(out, binary.BigEndian, args.data)
 
 	return out.Bytes(), nil
 }
@@ -59,7 +72,7 @@ type wsInputPayload struct {
 * Parses the data into a wsInputPayload
  * data: the data to parse in []byte
 */
-func parseFrame(reader io.Reader) (*wsInputPayload, error) {
+func parseIncomingFrame(reader io.Reader) (*wsInputPayload, error) {
 	//zeroth byte (fin, rsv1, rsv2, rsv3, opCode)
 	payload := &wsInputPayload{}
 
@@ -120,17 +133,12 @@ func parseFrame(reader io.Reader) (*wsInputPayload, error) {
 		payload.MaskKey = maskKey
 	}
 
-	payloadData := make([]byte, payload.Length)
 	remainingPayload, err := readTill(reader, payload.Length)
 
 	if err != nil {
 		return nil, err
 	}
 
-	for i := 0; i < payload.Length; i++ {
-		payloadData[i] = remainingPayload[i] ^ payload.MaskKey[i&0x03]
-	}
-
-	payload.Data = payloadData
+	payload.Data = maskData(remainingPayload, payload.MaskKey)
 	return payload, nil
 }

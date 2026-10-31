@@ -16,6 +16,7 @@ func main() {
 	})
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("client connected")
 		openConnections++
 		upgrader := ws.NewUpgrader(ws.UpgraderConfiguration{})
 		conn, err := upgrader.Upgrade(w, r)
@@ -37,9 +38,17 @@ func main() {
 			if err != nil {
 				var ce *ws.CloseError
 				if ok := errors.As(err, &ce); ok {
-					fmt.Println(ce.Error())
+					log.Println(ce.Error())
+					return
 				}
 				log.Println(err)
+				return
+			}
+
+			err = conn.WriteMessage([]byte("hello there from server"))
+
+			if err != nil {
+				log.Println("err in write", err)
 				return
 			}
 		}

@@ -1,11 +1,14 @@
 package ws
 
 import (
+	"errors"
+	"fmt"
 	"net"
 )
 
 type connection struct {
-	conn net.Conn
+	conn          net.Conn
+	maskDataBytes bool
 }
 
 func (conn *connection) Close() error {
@@ -22,19 +25,22 @@ func (conn *connection) ReadMessage(cb func(payloadData []byte)) error {
 
 	for {
 		if fin {
-			break
+			cb(data)
+			return nil
 		}
 
-		payload, err := parseFrame(conn.conn)
-		fin = payload.Fin
+		payload, err := parseIncomingFrame(conn.conn)
 
 		if err != nil {
+			fmt.Println("raw error in reading message", err)
 			err := conn.Close()
 			if err != nil {
-				return &CloseError{Reason: "Error in closing connection."}
+				return errors.New("Error in closing connection.")
 			}
-			return &CloseError{Reason: "Error in parsing data."}
+			return errors.New("Error in parsing data.")
 		}
+
+		fin = payload.Fin
 
 		if payload.ClientDisconnected {
 			err := conn.Close()
@@ -46,14 +52,20 @@ func (conn *connection) ReadMessage(cb func(payloadData []byte)) error {
 
 		data = append(data, payload.Data...)
 	}
-
-	cb(data)
-
-	return nil
 }
 
 func (conn *connection) WriteMessage(data []byte) error {
-	buf, err := writeData(data)
+	args := prepareWriteFrameArgs{
+		data:    data,
+		maskKey: nil,
+	}
+	if conn.maskDataBytes {
+		args.maskKey = genMaskKey()
+	}
+
+	buf, err := prepareWriteFrame(args)
+
+	fmt.Printf("write bytes %b", buf)
 
 	if err != nil {
 		return err

@@ -38,7 +38,7 @@ func (ws *upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (*connection
 		return nil, err
 	}
 
-	conn := &connection{conn: newWs.conn}
+	conn := &connection{conn: newWs.conn, maskDataBytes: false}
 
 	return conn, nil
 }
