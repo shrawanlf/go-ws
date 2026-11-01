@@ -50,15 +50,6 @@ func (frame wsframe) hasValidMaskingKey() error {
 func prepareFrame(frame wsframe) ([]byte, error) {
 	frameLength, payloadDataStartId := getFrameSize(&frame)
 	frameBytes := make([]byte, frameLength)
-	needsMask := false
-
-	if frame.hasMaskingKey() {
-		if err := frame.hasValidMaskingKey(); err != nil {
-			return nil, err
-		}
-		frameBytes[1] = frameBytes[1] | (1 << 7)
-		needsMask = true
-	}
 
 	if frame.fin == 1 {
 		frameBytes[0] = frameBytes[0] | (1 << 7)
@@ -72,6 +63,13 @@ func prepareFrame(frame wsframe) ([]byte, error) {
 
 	if frame.payloadLenCode == 0 {
 		return frameBytes, nil
+	}
+
+	if frame.hasMaskingKey() {
+		if err := frame.hasValidMaskingKey(); err != nil {
+			return nil, err
+		}
+		frameBytes[1] = frameBytes[1] | (1 << 7)
 	}
 
 	if frame.payloadLenCode == FRAME_LEN_CODE_7 {
@@ -93,7 +91,7 @@ func prepareFrame(frame wsframe) ([]byte, error) {
 		return nil, errors.New("invalid len code received")
 	}
 
-	if needsMask {
+	if frame.hasMaskingKey() {
 		maskData(*frame.payloadData, frame.maskingKey)
 	}
 
@@ -132,16 +130,15 @@ func parseIncomingFrame(reader io.Reader) (*wsframe, error) {
 	frame.mask = (secondByte[0] >> 7) & 0x01
 	length := secondByte[0] & 0x7f
 
-	// bigger payload lengths
-	if length <= 125 {
+	if length <= FRAME_LEN_CODE_7 {
 		frame.payloadLen = int(length)
-	} else if length == 126 {
+	} else if length == FRAME_LEN_CODE_7_16_BIT {
 		dat, err := readTill(reader, 2)
 		if err != nil {
 			return nil, err
 		}
 		frame.payloadLen = int(binary.BigEndian.Uint16(dat))
-	} else if length == 127 {
+	} else if length == FRAME_LEN_CODE_7_64_BIT {
 		dat, err := readTill(reader, 8)
 		if err != nil {
 			return nil, err

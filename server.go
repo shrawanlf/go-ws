@@ -1,8 +1,6 @@
 package ws
 
 import (
-	"crypto/sha1"
-	"encoding/base64"
 	"errors"
 	"net/http"
 	"strings"
@@ -10,24 +8,6 @@ import (
 
 type serverConn struct {
 	*baseConn
-}
-
-func (conn *serverConn) WriteMessage(data []byte) error {
-	buf, err := prepareFrame(wsframe{
-		fin:         1,
-		rsv1:        0,
-		opCode:      1,
-		mask:        0,
-		payloadLen:  len(data),
-		payloadData: &data,
-	})
-
-	if err != nil {
-		return err
-	}
-
-	conn.conn.Write(buf)
-	return nil
 }
 
 type UpgraderConfiguration struct{}
@@ -71,9 +51,20 @@ func (ws *upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (wsconnectio
 	return &serverConn{baseConn: &baseConn{conn: conn}}, nil
 }
 
-func getAcceptHash(key string) string {
-	h := sha1.New()
-	h.Write([]byte(key))
-	h.Write([]byte("258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
-	return base64.StdEncoding.EncodeToString(h.Sum(nil))
+func (conn *serverConn) WriteMessage(data []byte) error {
+	buf, err := prepareFrame(wsframe{
+		fin:         1,
+		rsv1:        0,
+		opCode:      1,
+		mask:        0,
+		payloadLen:  len(data),
+		payloadData: &data,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	conn.conn.Write(buf)
+	return nil
 }

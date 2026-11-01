@@ -2,6 +2,7 @@ package ws
 
 import (
 	"crypto/rand"
+	"crypto/sha1"
 	"encoding/base64"
 	"io"
 	"net/http"
@@ -60,13 +61,13 @@ func getFrameSize(frame *wsframe) (int, int) {
 	}
 
 	if payloadLen <= 125 {
-		frame.payloadLenCode = 125
+		frame.payloadLenCode = FRAME_LEN_CODE_7
 	} else if payloadLen >= 126 && payloadLen <= 65535 {
 		totalFrameLength += 2
-		frame.payloadLenCode = 126
+		frame.payloadLenCode = FRAME_LEN_CODE_7_16_BIT
 	} else if payloadLen >= 65536 {
 		totalFrameLength += 8
-		frame.payloadLenCode = 127
+		frame.payloadLenCode = FRAME_LEN_CODE_7_64_BIT
 	}
 
 	if frame.hasMaskingKey() {
@@ -77,4 +78,11 @@ func getFrameSize(frame *wsframe) (int, int) {
 	totalFrameLength += payloadLen
 
 	return totalFrameLength, payloadDataStartIdx
+}
+
+func getAcceptHash(key string) string {
+	h := sha1.New()
+	h.Write([]byte(key))
+	h.Write([]byte("258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
