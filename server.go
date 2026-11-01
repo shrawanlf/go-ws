@@ -1,23 +1,36 @@
 package ws
 
 import (
-	"bufio"
 	"crypto/sha1"
 	"encoding/base64"
-	"fmt"
-	"net"
+	"errors"
 	"net/http"
 	"strings"
 )
 
-type ws struct {
-	conn    net.Conn
-	bufioRw bufio.ReadWriter
-	header  http.Header
+type serverConn struct {
+	*baseConn
 }
 
-type UpgraderConfiguration struct {
+func (conn *serverConn) WriteMessage(data []byte) error {
+	buf, err := prepareFrame(wsframe{
+		fin:         1,
+		rsv1:        0,
+		opCode:      1,
+		mask:        0,
+		payloadLen:  len(data),
+		payloadData: &data,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	conn.conn.Write(buf)
+	return nil
 }
+
+type UpgraderConfiguration struct{}
 
 type upgrader struct{}
 
@@ -25,48 +38,20 @@ func NewUpgrader(conf UpgraderConfiguration) *upgrader {
 	return &upgrader{}
 }
 
-func (ws *upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (*connection, error) {
-	newWs, err := newWebsocket(w, r)
+func (ws *upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (wsconnection, error) {
+	conn, _, err := http.NewResponseController(w).Hijack()
 
 	if err != nil {
 		return nil, err
 	}
 
-	err = newWs.handshake()
-
-	if err != nil {
-		return nil, err
+	secureKey := r.Header.Get("Sec-Websocket-Key")
+	if secureKey == "" {
+		return nil, errors.New("")
 	}
 
-	conn := &connection{conn: newWs.conn, maskDataBytes: false}
+	hash := getAcceptHash(secureKey)
 
-	return conn, nil
-}
-
-func newWebsocket(w http.ResponseWriter, r *http.Request) (*ws, error) {
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		return nil, fmt.Errorf("no support for hijacking")
-	}
-
-	conn, bufioRw, error := hj.Hijack()
-
-	if error != nil {
-		return nil, error
-	}
-
-	return &ws{conn: conn, bufioRw: *bufioRw, header: r.Header}, nil
-}
-
-func getAcceptHash(key string) string {
-	h := sha1.New()
-	h.Write([]byte(key))
-	h.Write([]byte("258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
-	return base64.StdEncoding.EncodeToString(h.Sum(nil))
-}
-
-func (ws *ws) handshake() error {
-	hash := getAcceptHash(ws.header.Get("Sec-WebSocket-Key"))
 	lines := []string{
 		"HTTP/1.1 101 Web Socket Protocol Handshake",
 		"Server: go/echoserver",
@@ -76,6 +61,19 @@ func (ws *ws) handshake() error {
 		"",
 		"",
 	}
-	_, err := ws.conn.Write([]byte(strings.Join(lines, "\r\n")))
-	return err
+
+	_, err = conn.Write([]byte(strings.Join(lines, "\r\n")))
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &serverConn{baseConn: &baseConn{conn: conn}}, nil
+}
+
+func getAcceptHash(key string) string {
+	h := sha1.New()
+	h.Write([]byte(key))
+	h.Write([]byte("258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }

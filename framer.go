@@ -1,101 +1,127 @@
 package ws
 
 import (
-	"bytes"
 	"encoding/binary"
-	"fmt"
+	"errors"
 	"io"
 )
 
-type prepareWriteFrameArgs struct {
-	data    []byte
-	maskKey []byte
+type FRAME_LEN_CODE = byte
+
+const (
+	FRAME_LEN_CODE_7        FRAME_LEN_CODE = 125
+	FRAME_LEN_CODE_7_16_BIT FRAME_LEN_CODE = 126
+	FRAME_LEN_CODE_7_64_BIT FRAME_LEN_CODE = 127
+)
+
+type wsframe struct {
+	fin            byte
+	rsv1           byte
+	rsv2           byte
+	rsv3           byte
+	opCode         byte
+	mask           byte
+	payloadLenCode FRAME_LEN_CODE
+	payloadLen     int
+	maskingKey     []byte
+	payloadData    *[]byte
 }
 
-func prepareWriteFrame(args prepareWriteFrameArgs) ([]byte, error) {
-	out := bytes.NewBuffer(nil)
-	firstByte := byte(0)
-	// FIN, RSV1, RSV2, RSV3 are not set for now, defaults to 0
-	firstByte = firstByte | (1 << 7)
-
-	// OPCODE
-	firstByte = firstByte | (1 << 0)
-
-	out.WriteByte(firstByte)
-
-	firstByte = byte(0)
-
-	if args.maskKey != nil {
-		firstByte = firstByte | (1 << 7)
-	}
-
-	// LENGTH
-	length := len(args.data)
-
-	if length <= 125 {
-		out.WriteByte(firstByte | byte(length))
-	} else if length >= 126 && length <= 65535 {
-		out.WriteByte(firstByte | byte(126))
-		err := binary.Write(out, binary.BigEndian, uint16(length))
-		if err != nil {
-			return nil, err
-		}
-	} else if length >= 65536 {
-		out.WriteByte(firstByte | byte(127))
-		err := binary.Write(out, binary.BigEndian, uint64(length))
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	binary.Write(out, binary.BigEndian, args.maskKey)
-
-	// skip masking key, writing data should not have a masking key
-
-	binary.Write(out, binary.BigEndian, args.data)
-
-	return out.Bytes(), nil
+func (frame wsframe) clientDiconnectionNews() bool {
+	return frame.opCode == 0x08
 }
 
-type wsInputPayload struct {
-	Length int
-	OpCode byte
-	// if fin is true, this is the final fragment of the websocket message
-	Fin                bool
-	ClientDisconnected bool
-	Masked             bool
-	MaskKey            []byte
-	Data               []byte
+func (frame wsframe) finalFrame() bool {
+	return frame.fin == 1
+}
+
+func (frame wsframe) hasMaskingKey() bool {
+	return frame.mask == 1
+}
+
+func (frame wsframe) hasValidMaskingKey() error {
+	if frame.hasMaskingKey() && len(frame.maskingKey) != 4 {
+		return errors.New("invalid masking key provided")
+	}
+
+	return nil
+}
+
+func prepareFrame(frame wsframe) ([]byte, error) {
+	frameLength, payloadDataStartId := getFrameSize(&frame)
+	frameBytes := make([]byte, frameLength)
+	needsMask := false
+
+	if frame.hasMaskingKey() {
+		if err := frame.hasValidMaskingKey(); err != nil {
+			return nil, err
+		}
+		frameBytes[1] = frameBytes[1] | (1 << 7)
+		needsMask = true
+	}
+
+	if frame.fin == 1 {
+		frameBytes[0] = frameBytes[0] | (1 << 7)
+	}
+
+	if frame.rsv1 == 1 {
+		frameBytes[0] = frameBytes[0] | (1 << 4)
+	}
+
+	frameBytes[0] = frameBytes[0] | (frame.opCode << 0)
+
+	if frame.payloadLenCode == 0 {
+		return frameBytes, nil
+	}
+
+	if frame.payloadLenCode == FRAME_LEN_CODE_7 {
+		frameBytes[1] = frameBytes[1] | byte(frame.payloadLen)
+	} else {
+		frameBytes[1] = frameBytes[1] | byte(frame.payloadLenCode)
+	}
+
+	switch frame.payloadLenCode {
+	case FRAME_LEN_CODE_7:
+		frameBytes[1] = frameBytes[1] | byte(frame.payloadLen)
+	case FRAME_LEN_CODE_7_16_BIT:
+		frameBytes[1] = frameBytes[1] | byte(126)
+		binary.BigEndian.PutUint16(frameBytes[2:4], uint16(frame.payloadLen))
+	case FRAME_LEN_CODE_7_64_BIT:
+		frameBytes[1] = frameBytes[1] | byte(127)
+		binary.BigEndian.PutUint64(frameBytes[2:10], uint64(frame.payloadLen))
+	default:
+		return nil, errors.New("invalid len code received")
+	}
+
+	if needsMask {
+		maskData(*frame.payloadData, frame.maskingKey)
+	}
+
+	copy(frameBytes[payloadDataStartId:], *frame.payloadData)
+
+	return frameBytes, nil
 }
 
 /**
 * Parses the data into a wsInputPayload
  * data: the data to parse in []byte
 */
-func parseIncomingFrame(reader io.Reader) (*wsInputPayload, error) {
+func parseIncomingFrame(reader io.Reader) (*wsframe, error) {
 	//zeroth byte (fin, rsv1, rsv2, rsv3, opCode)
-	payload := &wsInputPayload{}
+	frame := &wsframe{}
 
 	firstByte, err := readTill(reader, 1)
 	if err != nil {
 		return nil, err
 	}
 
-	fin := (firstByte[0] >> 7) & 0x01
-	payload.Fin = fin == 1
-	rsv1 := (firstByte[0] >> 6) & 0x01
-	rsv2 := (firstByte[0] >> 5) & 0x01
-	rsv3 := (firstByte[0] >> 4) & 0x01
+	frame.fin = (firstByte[0] >> 7) & 0x01
+	frame.rsv1 = (firstByte[0] >> 6) & 0x01
 
-	opCode := firstByte[0] & 0x0f
-	payload.OpCode = opCode
+	// rsv2 := (firstByte[0] >> 5) & 0x01
+	// rsv3 := (firstByte[0] >> 4) & 0x01
 
-	if opCode == 0x08 {
-		payload.ClientDisconnected = true
-		return payload, nil
-	}
-
-	fmt.Println(fin, rsv1, rsv2, rsv3, opCode)
+	frame.opCode = firstByte[0] & 0x0f
 
 	// second byte (masked check and length data)
 	// up to the 10th byte for bigger length -> upto 64 bits
@@ -103,42 +129,41 @@ func parseIncomingFrame(reader io.Reader) (*wsInputPayload, error) {
 	if err != nil {
 		return nil, err
 	}
-	mask := (secondByte[0] >> 7) & 0x01
-	payload.Masked = mask != 0
+	frame.mask = (secondByte[0] >> 7) & 0x01
 	length := secondByte[0] & 0x7f
 
 	// bigger payload lengths
 	if length <= 125 {
-		payload.Length = int(length)
+		frame.payloadLen = int(length)
 	} else if length == 126 {
 		dat, err := readTill(reader, 2)
 		if err != nil {
 			return nil, err
 		}
-		payload.Length = int(binary.BigEndian.Uint16(dat))
+		frame.payloadLen = int(binary.BigEndian.Uint16(dat))
 	} else if length == 127 {
 		dat, err := readTill(reader, 8)
 		if err != nil {
 			return nil, err
 		}
-		payload.Length = int(binary.BigEndian.Uint64(dat))
+		frame.payloadLen = int(binary.BigEndian.Uint64(dat))
 	}
 
 	//11th byte (mask key)
-	if payload.Masked {
-		maskKey, err := readTill(reader, 4)
+	if frame.mask == 1 {
+		frame.maskingKey, err = readTill(reader, 4)
 		if err != nil {
 			return nil, err
 		}
-		payload.MaskKey = maskKey
 	}
 
-	remainingPayload, err := readTill(reader, payload.Length)
+	remainingPayload, err := readTill(reader, frame.payloadLen)
 
 	if err != nil {
 		return nil, err
 	}
 
-	payload.Data = maskData(remainingPayload, payload.MaskKey)
-	return payload, nil
+	maskData(remainingPayload, frame.maskingKey)
+	frame.payloadData = &remainingPayload
+	return frame, nil
 }

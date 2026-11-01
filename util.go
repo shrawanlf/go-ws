@@ -23,8 +23,8 @@ func genSecureKey() string {
 }
 
 func genMaskKey() []byte {
-	maskKey := make([]byte, 4)
-	_, _ = rand.Read(maskKey)
+	var maskKey []byte
+	_, _ = rand.Read(maskKey[:])
 	return maskKey
 }
 
@@ -34,12 +34,47 @@ func readTill(reader io.Reader, len int) ([]byte, error) {
 	return buf, err
 }
 
-func maskData(payload []byte, maskKey []byte) []byte {
-	payloadLen := len(payload)
-	maskedPayload := make([]byte, payloadLen)
-	for i, byte := range payload {
-		maskedPayload[i] = byte ^ maskKey[i&0x03]
+/*
+Masks payload bytes
+*/
+func maskData(payload []byte, maskKey []byte) {
+	for i := range payload {
+		payload[i] ^= maskKey[i&3]
+	}
+}
+
+func getFrameSize(frame *wsframe) (int, int) {
+	totalFrameLength := 2
+	payloadDataStartIdx := 2
+	var payloadLen int
+
+	if frame.payloadLen == 0 {
+		payloadLen = len(*frame.payloadData)
+		frame.payloadLen = payloadLen
+	} else {
+		payloadLen = frame.payloadLen
 	}
 
-	return maskedPayload
+	if payloadLen == 0 {
+		return 0, 0
+	}
+
+	if payloadLen <= 125 {
+		frame.payloadLenCode = 125
+	} else if payloadLen >= 126 && payloadLen <= 65535 {
+		totalFrameLength += 2
+		frame.payloadLenCode = 126
+	} else if payloadLen >= 65536 {
+		totalFrameLength += 8
+		frame.payloadLenCode = 127
+	}
+
+	if frame.hasMaskingKey() {
+		payloadDataStartIdx = totalFrameLength + 4
+	} else {
+		payloadDataStartIdx = totalFrameLength
+	}
+	totalFrameLength += payloadLen
+
+	return totalFrameLength, payloadDataStartIdx
 }

@@ -9,11 +9,35 @@ import (
 	"time"
 )
 
+type clientConn struct {
+	conn net.Conn
+	*baseConn
+}
+
 type WsClientConfigurationOpts struct {
 	Url string
 }
 
-func NewWsClient(opts WsClientConfigurationOpts) (*connection, error) {
+func (conn *clientConn) WriteMessage(data []byte) error {
+	buf, err := prepareFrame(wsframe{
+		fin:         1,
+		rsv1:        0,
+		opCode:      1,
+		mask:        1,
+		maskingKey:  genMaskKey(),
+		payloadLen:  len(data),
+		payloadData: &data,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	conn.conn.Write(buf)
+	return nil
+}
+
+func NewWsClient(opts WsClientConfigurationOpts) (*clientConn, error) {
 	url, err := url.Parse(opts.Url)
 
 	if err != nil {
@@ -61,5 +85,5 @@ func NewWsClient(opts WsClientConfigurationOpts) (*connection, error) {
 		return nil, conn.Close()
 	}
 
-	return &connection{conn: conn, maskDataBytes: true}, nil
+	return &clientConn{baseConn: &baseConn{conn: conn}, conn: conn}, nil
 }

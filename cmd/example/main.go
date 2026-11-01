@@ -31,9 +31,7 @@ func main() {
 		}
 
 		for {
-			err := conn.ReadMessage(func(data []byte) {
-				fmt.Println("data", string(data))
-			})
+			data, err := conn.ReadMessage()
 
 			if err != nil {
 				var ce *ws.CloseError
@@ -45,7 +43,9 @@ func main() {
 				return
 			}
 
-			err = conn.WriteMessage([]byte("hello there from server"))
+			fmt.Println(string(data))
+
+			err = conn.WriteMessage([]byte("hello there from the server!"))
 
 			if err != nil {
 				log.Println("err in write", err)
