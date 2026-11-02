@@ -72,21 +72,18 @@ func prepareFrame(frame wsframe) ([]byte, error) {
 		frameBytes[1] = frameBytes[1] | (1 << 7)
 	}
 
-	if frame.payloadLenCode == FRAME_LEN_CODE_7 {
-		frameBytes[1] = frameBytes[1] | byte(frame.payloadLen)
-	} else {
-		frameBytes[1] = frameBytes[1] | byte(frame.payloadLenCode)
-	}
-
 	switch frame.payloadLenCode {
 	case FRAME_LEN_CODE_7:
 		frameBytes[1] = frameBytes[1] | byte(frame.payloadLen)
+		copy(frameBytes[2:6], frame.maskingKey)
 	case FRAME_LEN_CODE_7_16_BIT:
 		frameBytes[1] = frameBytes[1] | byte(126)
 		binary.BigEndian.PutUint16(frameBytes[2:4], uint16(frame.payloadLen))
+		copy(frameBytes[4:8], frame.maskingKey)
 	case FRAME_LEN_CODE_7_64_BIT:
 		frameBytes[1] = frameBytes[1] | byte(127)
 		binary.BigEndian.PutUint64(frameBytes[2:10], uint64(frame.payloadLen))
+		copy(frameBytes[10:14], frame.maskingKey)
 	default:
 		return nil, errors.New("invalid len code received")
 	}
@@ -130,20 +127,24 @@ func parseIncomingFrame(reader io.Reader) (*wsframe, error) {
 	frame.mask = (secondByte[0] >> 7) & 0x01
 	length := secondByte[0] & 0x7f
 
-	if length <= FRAME_LEN_CODE_7 {
+	switch {
+	case length <= FRAME_LEN_CODE_7:
 		frame.payloadLen = int(length)
-	} else if length == FRAME_LEN_CODE_7_16_BIT {
+		frame.payloadLenCode = FRAME_LEN_CODE_7
+	case length == FRAME_LEN_CODE_7_16_BIT:
 		dat, err := readTill(reader, 2)
 		if err != nil {
 			return nil, err
 		}
 		frame.payloadLen = int(binary.BigEndian.Uint16(dat))
-	} else if length == FRAME_LEN_CODE_7_64_BIT {
+		frame.payloadLenCode = FRAME_LEN_CODE_7_16_BIT
+	case length == FRAME_LEN_CODE_7_64_BIT:
 		dat, err := readTill(reader, 8)
 		if err != nil {
 			return nil, err
 		}
 		frame.payloadLen = int(binary.BigEndian.Uint64(dat))
+		frame.payloadLenCode = FRAME_LEN_CODE_7_64_BIT
 	}
 
 	//11th byte (mask key)

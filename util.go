@@ -24,8 +24,8 @@ func genSecureKey() string {
 }
 
 func genMaskKey() []byte {
-	var maskKey []byte
-	_, _ = rand.Read(maskKey[:])
+	maskKey := make([]byte, 4)
+	_, _ = rand.Read(maskKey)
 	return maskKey
 }
 
@@ -46,7 +46,6 @@ func maskData(payload []byte, maskKey []byte) {
 
 func getFrameSize(frame *wsframe) (int, int) {
 	totalFrameLength := 2
-	payloadDataStartIdx := 2
 	var payloadLen int
 
 	if frame.payloadLen == 0 {
@@ -71,10 +70,10 @@ func getFrameSize(frame *wsframe) (int, int) {
 	}
 
 	if frame.hasMaskingKey() {
-		payloadDataStartIdx = totalFrameLength + 4
-	} else {
-		payloadDataStartIdx = totalFrameLength
+		totalFrameLength += 4
 	}
+
+	payloadDataStartIdx := totalFrameLength
 	totalFrameLength += payloadLen
 
 	return totalFrameLength, payloadDataStartIdx
