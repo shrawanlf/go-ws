@@ -65,6 +65,11 @@ func (conn *serverConn) WriteMessage(data []byte) error {
 		return err
 	}
 
-	conn.conn.Write(buf)
+	_, err = conn.conn.Write(buf)
+
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
