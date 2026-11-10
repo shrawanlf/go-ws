@@ -14,6 +14,8 @@ func main() {
 		log.Fatal(err)
 	}
 
+	defer conn.Close()
+
 	err = conn.WriteMessage([]byte("hello from the running client."))
 
 	if err != nil {

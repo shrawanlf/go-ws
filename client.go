@@ -10,7 +10,6 @@ import (
 )
 
 type clientConn struct {
-	conn net.Conn
 	*baseConn
 }
 
@@ -21,8 +20,7 @@ type WsClientConfigurationOpts struct {
 func (conn *clientConn) WriteMessage(data []byte) error {
 	buf, err := prepareFrame(wsframe{
 		fin:         1,
-		rsv1:        0,
-		opCode:      1,
+		opCode:      OpCodeText,
 		mask:        1,
 		maskingKey:  genMaskKey(),
 		payloadLen:  len(data),
@@ -85,5 +83,5 @@ func NewWsClient(opts WsClientConfigurationOpts) (*clientConn, error) {
 		return nil, conn.Close()
 	}
 
-	return &clientConn{baseConn: &baseConn{conn: conn}, conn: conn}, nil
+	return &clientConn{baseConn: &baseConn{conn: conn, state: ConnectionStateOpen}}, nil
 }

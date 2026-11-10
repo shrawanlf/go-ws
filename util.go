@@ -17,6 +17,12 @@ func respHasHeaderWithValue(resp *http.Response, key string, value string) bool 
 	return true
 }
 
+func genRandomString(length int) []byte {
+	randBytes := make([]byte, length)
+	rand.Read(randBytes)
+	return randBytes
+}
+
 func genSecureKey() string {
 	keyBytes := make([]byte, 16)
 	_, _ = rand.Read(keyBytes)
@@ -48,7 +54,7 @@ func getFrameSize(frame *wsframe) (int, int) {
 	totalFrameLength := 2
 	var payloadLen int
 
-	if frame.payloadLen == 0 {
+	if frame.payloadLen == 0 && frame.payloadData != nil {
 		payloadLen = len(*frame.payloadData)
 		frame.payloadLen = payloadLen
 	} else {
@@ -56,7 +62,7 @@ func getFrameSize(frame *wsframe) (int, int) {
 	}
 
 	if payloadLen == 0 {
-		return 0, 0
+		return totalFrameLength, 0
 	}
 
 	if payloadLen <= 125 {

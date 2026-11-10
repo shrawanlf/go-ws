@@ -1,8 +1,37 @@
 package ws
 
 import (
-	"errors"
 	"net"
+	"sync"
+)
+
+type FRAME_LEN_CODE = byte
+type ConnectionState string
+type CloseFrameStatusCode = uint16
+
+const (
+	FRAME_LEN_CODE_7        FRAME_LEN_CODE = 125
+	FRAME_LEN_CODE_7_16_BIT FRAME_LEN_CODE = 126
+	FRAME_LEN_CODE_7_64_BIT FRAME_LEN_CODE = 127
+)
+
+const (
+	CloseFrameStatusCodeNormal        CloseFrameStatusCode = 1000
+	CloseFrameStatusCodeProtocolError CloseFrameStatusCode = 1002
+)
+
+const (
+	ConnectionStateOpen    ConnectionState = "Open"
+	ConnectionStateClosing ConnectionState = "Closing"
+	ConnectionStateClosed  ConnectionState = "Closed"
+)
+
+const (
+	OpCodeText            = 1
+	OpCodeBinary          = 2
+	OpCodeConnectionClose = 8
+	OpCodePing            = 9
+	OpCodePong            = 10
 )
 
 type wsconnection interface {
@@ -12,46 +41,68 @@ type wsconnection interface {
 }
 
 type baseConn struct {
-	conn net.Conn
+	id      string
+	mu      sync.Mutex
+	conn    net.Conn
+	state   ConnectionState
+	closeCh chan bool
 }
 
-func (conn *baseConn) Close() error {
-	return conn.conn.Close()
+func (conn *baseConn) setState(state ConnectionState) {
+	defer conn.mu.Unlock()
+	conn.mu.Lock()
+	conn.state = state
 }
 
-/*
-ReadMessage reads data from the connection and calls the callback function with the data.
-A connection closed from client and failure in parsing data will return a CloseError
-*/
-func (conn *baseConn) ReadMessage() ([]byte, error) {
-	var fin bool
-	var data []byte
+func (conn *baseConn) readIncomingFrame() (wsframe, error) {
+	defer conn.mu.Unlock()
+	conn.mu.Lock()
+	return parseIncomingFrame(conn.conn)
+}
 
-	for {
-		if fin {
-			return data, nil
-		}
+func (conn *baseConn) write(data []byte) error {
+	defer conn.mu.Unlock()
+	conn.mu.Lock()
+	_, err := conn.conn.Write(data)
 
-		frame, err := parseIncomingFrame(conn.conn)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (conn *serverConn) close(reply bool) error {
+	defer func() {
+		conn.setState(ConnectionStateClosed)
+		conn.closeCh <- true
+	}()
+
+	closeFrame, err := connectionCloseFrame(CloseFrameStatusCodeNormal, "closed from server")
+
+	if err != nil {
+		return err
+	}
+
+	conn.setState(ConnectionStateClosing)
+
+	err = conn.write(closeFrame)
+
+	if err != nil {
+		return err
+	}
+
+	if reply {
+		frame, err := conn.readIncomingFrame()
 
 		if err != nil {
-			err := conn.Close()
-			if err != nil {
-				return nil, errors.New("Error in closing connection.")
-			}
-			return nil, errors.New("Error in parsing data.")
+			return conn.conn.Close()
 		}
 
-		if frame.clientDiconnectionNews() {
-			err := conn.Close()
-			if err != nil {
-				return nil, &CloseError{Reason: "Error in closing connection."}
-			}
-			return nil, &CloseError{Reason: "connection closed from client."}
+		if ok := frame.isCloseFrame(); !ok {
+			return conn.conn.Close()
 		}
-
-		fin = frame.finalFrame()
-
-		data = append(data, *frame.payloadData...)
 	}
+
+	return conn.conn.Close()
 }

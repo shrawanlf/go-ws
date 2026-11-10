@@ -43,14 +43,21 @@ func main() {
 				return
 			}
 
-			fmt.Println(string(data))
+			fmt.Println("data", string(data))
 
-			err = conn.WriteMessage([]byte("hello there from the server!"))
+			err = conn.WriteMessage([]byte("Hello there from server"))
 
 			if err != nil {
-				log.Println("err in write", err)
+				log.Println(err)
 				return
 			}
+
+			// err = conn.Close()
+			//
+			// if err != nil {
+			// 	log.Println("err", err)
+			// 	return
+			// }
 		}
 	})
 
