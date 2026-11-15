@@ -16,8 +16,11 @@ const (
 )
 
 const (
-	CloseFrameStatusCodeNormal        CloseFrameStatusCode = 1000
-	CloseFrameStatusCodeProtocolError CloseFrameStatusCode = 1002
+	CloseFrameStatusCodeNormal                CloseFrameStatusCode = 1000
+	CloseFrameGoingAway                       CloseFrameStatusCode = 1001
+	CloseFrameStatusCodeProtocolError         CloseFrameStatusCode = 1002
+	CloseFrameStatusCodeMessageLengthOverflow CloseFrameStatusCode = 1009
+	CloseFrameStatusCodeUnexpectedError       CloseFrameStatusCode = 1011
 )
 
 const (
@@ -27,11 +30,12 @@ const (
 )
 
 const (
-	OpCodeText            = 1
-	OpCodeBinary          = 2
-	OpCodeConnectionClose = 8
-	OpCodePing            = 9
-	OpCodePong            = 10
+	OpCodeContinuationFrame = 0
+	OpCodeText              = 1
+	OpCodeBinary            = 2
+	OpCodeConnectionClose   = 8
+	OpCodePing              = 9
+	OpCodePong              = 10
 )
 
 type wsconnection interface {
@@ -42,30 +46,26 @@ type wsconnection interface {
 
 type baseConn struct {
 	id      string
-	mu      sync.Mutex
+	writeMu sync.Mutex
+	readMu  sync.RWMutex
 	conn    net.Conn
 	state   ConnectionState
-	closeCh chan bool
+	done    chan struct{}
 }
 
 func (conn *baseConn) setState(state ConnectionState) {
-	defer conn.mu.Unlock()
-	conn.mu.Lock()
 	conn.state = state
 }
 
 func (conn *baseConn) readIncomingFrame() (wsframe, error) {
-	defer conn.mu.Unlock()
-	conn.mu.Lock()
 	return parseIncomingFrame(conn.conn)
 }
 
 func (conn *baseConn) write(data []byte) error {
-	defer conn.mu.Unlock()
-	conn.mu.Lock()
-	_, err := conn.conn.Write(data)
+	conn.writeMu.Lock()
+	defer conn.writeMu.Unlock()
 
-	if err != nil {
+	if _, err := conn.conn.Write(data); err != nil {
 		return err
 	}
 
@@ -75,7 +75,7 @@ func (conn *baseConn) write(data []byte) error {
 func (conn *serverConn) close(reply bool) error {
 	defer func() {
 		conn.setState(ConnectionStateClosed)
-		conn.closeCh <- true
+		close(conn.done)
 	}()
 
 	closeFrame, err := connectionCloseFrame(CloseFrameStatusCodeNormal, "closed from server")
@@ -85,7 +85,6 @@ func (conn *serverConn) close(reply bool) error {
 	}
 
 	conn.setState(ConnectionStateClosing)
-
 	err = conn.write(closeFrame)
 
 	if err != nil {
@@ -96,7 +95,7 @@ func (conn *serverConn) close(reply bool) error {
 		frame, err := conn.readIncomingFrame()
 
 		if err != nil {
-			return conn.conn.Close()
+			return err
 		}
 
 		if ok := frame.isCloseFrame(); !ok {

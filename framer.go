@@ -4,19 +4,20 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"log"
 )
 
 type wsframe struct {
-	//sets the  fin bit
+	//the fin bit, used to check if this frame is the only frame sent from sender
 	fin byte
-	// rsv1 is for extension negotiation
+	// rsv1 bit for extension negotiation
 	rsv1 byte
 	rsv2 byte
 	rsv3 byte
 	// opcode defines the payload data type
-	// a certain set of numbers(8, 9, 10) denote control frames
+	// a certain set of numbers (8, 9, 10) denote control frames
 	opCode byte
-	// mask bit ensures if the payload data is masked or not
+	// mask bit ensures if the payload data is masked or not, masked from a client's end only
 	mask byte
 	// length code, denotes if the length of payload data needs more bytes to be read or is sufficient in the provided 7 bit
 	// each length code is mapped based on the payload length
@@ -24,7 +25,7 @@ type wsframe struct {
 	payloadLen     int
 	// the 4 byte masking key is used both to mask/unmask the data
 	maskingKey []byte
-	// the actual frame payload data
+	// the actual application data
 	payloadData *[]byte
 }
 
@@ -143,7 +144,6 @@ func prepareFrame(frame wsframe) ([]byte, error) {
  * data: the data to parse in []byte
 */
 func parseIncomingFrame(reader io.Reader) (wsframe, error) {
-	//zeroth byte (fin, rsv1, rsv2, rsv3, opCode)
 	frame := wsframe{}
 
 	firstByte, err := readTill(reader, 1)
@@ -188,8 +188,7 @@ func parseIncomingFrame(reader io.Reader) (wsframe, error) {
 		frame.payloadLenCode = FRAME_LEN_CODE_7_64_BIT
 	}
 
-	//11th byte (mask key)
-	if frame.mask == 1 {
+	if frame.hasMaskingKey() {
 		frame.maskingKey, err = readTill(reader, 4)
 		if err != nil {
 			return frame, err
@@ -204,5 +203,6 @@ func parseIncomingFrame(reader io.Reader) (wsframe, error) {
 
 	maskData(remainingPayload, frame.maskingKey)
 	frame.payloadData = &remainingPayload
+	log.Println("frame", frame)
 	return frame, nil
 }

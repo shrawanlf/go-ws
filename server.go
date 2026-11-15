@@ -3,7 +3,6 @@ package ws
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -53,9 +52,9 @@ func (ws *upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (wsconnectio
 		return nil, err
 	}
 
-	serverConnection := &serverConn{baseConn: &baseConn{conn: conn, state: ConnectionStateOpen, closeCh: make(chan bool)}}
+	serverConnection := &serverConn{baseConn: &baseConn{conn: conn, state: ConnectionStateOpen, done: make(chan struct{})}}
 
-	go serverConnection.startPinging()
+	go serverConnection.startPing()
 
 	return serverConnection, nil
 }
@@ -82,26 +81,24 @@ func (conn *serverConn) WriteMessage(data []byte) error {
 }
 
 func (conn *serverConn) setLastPingId(id []byte) {
-	defer conn.mu.Unlock()
-	conn.mu.Lock()
 	conn.lastPingId = id
 }
 
-// TODO: Need to close this loop on client connection end
-func (conn *serverConn) startPinging() {
+func (conn *serverConn) startPing() {
 	for {
 		select {
-		case <-conn.closeCh:
+		case <-conn.done:
 			log.Println("closing pinger for this connection")
 			return
 		default:
-			fmt.Println("starting ping", string(conn.lastPingId))
+			log.Println("starting ping", string(conn.lastPingId))
 			pingId := genRandomString(10)
 			conn.setLastPingId(pingId)
-			fmt.Println("set ping id")
+			log.Println("set ping id")
 			frame, err := prepareFrame(wsframe{
 				fin:         1,
 				rsv1:        0,
+				mask:        0,
 				opCode:      OpCodePing,
 				payloadLen:  len(pingId),
 				payloadData: &pingId,
@@ -138,22 +135,29 @@ A connection closed from client and failure in parsing data will return a CloseE
 */
 func (conn *serverConn) ReadMessage() ([]byte, error) {
 	var fin bool
-	var data []byte
+	dataBuf := bytes.NewBuffer(nil)
 
-	// A closing or closed connection should prohibit data read
-	if conn.state == ConnectionStateClosed || conn.state == ConnectionStateClosing {
-		return data, nil
-	}
+	// fin => 1, end return the data as a whole at once.
+	// fin => 0, means continuation frame, save the last opCode
+	// fin => 0 & opCode = 0, means previous opCode with data
+	// fin => 1, finally means finished.
 
 	for {
 		if fin {
-			return data, nil
+			log.Println("yup fin")
+			return dataBuf.Bytes(), nil
+		}
+
+		// A closing or closed connection should prohibit data read
+		if conn.state == ConnectionStateClosed || conn.state == ConnectionStateClosing {
+			log.Println("connection closing")
+			continue
 		}
 
 		frame, err := conn.readIncomingFrame()
 
 		if err != nil {
-			fmt.Println("errorr", err)
+			log.Println("error raw", err)
 			err := conn.Close()
 			if err != nil {
 				return nil, errors.New("Error in closing connection.")
@@ -163,6 +167,7 @@ func (conn *serverConn) ReadMessage() ([]byte, error) {
 
 		if ok, cf := frame.isControlFrame(); ok {
 			if cf == OpCodeConnectionClose {
+				log.Println("close frame received")
 				err := conn.closeFromClient()
 				if err != nil {
 					return nil, &CloseError{Reason: "Error in closing connection."}
@@ -171,19 +176,26 @@ func (conn *serverConn) ReadMessage() ([]byte, error) {
 			}
 
 			if cf == OpCodePong {
-				fmt.Println("pong received")
+				log.Println("pong received")
 				pingId := frame.payloadData
 				if ok := bytes.Equal(*pingId, conn.lastPingId); !ok {
-					fmt.Println("invalid ping id received")
+					log.Println("invalid ping id received")
 				}
 
-				fmt.Println("valid pong id received")
-				return data, nil
+				log.Println("valid pong id received")
+
+				// skip on pong data receive
+				// first byte should always have a fin bit enabled
+				dataBuf.Reset()
+				if !frame.finalFrame() {
+					return nil, nil
+				}
+				continue
 			}
 		}
 
 		fin = frame.finalFrame()
 
-		data = append(data, *frame.payloadData...)
+		dataBuf.Write(*frame.payloadData)
 	}
 }
