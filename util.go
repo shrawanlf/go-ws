@@ -17,22 +17,23 @@ func respHasHeaderWithValue(resp *http.Response, key string, value string) bool 
 	return true
 }
 
-func genRandomString(length int) []byte {
+func genRandomBytes(length int) []byte {
 	randBytes := make([]byte, length)
 	rand.Read(randBytes)
 	return randBytes
 }
 
+func genRandomString(length int) string {
+	b := genRandomBytes(length)
+	return base64.StdEncoding.EncodeToString(b)
+}
+
 func genSecureKey() string {
-	keyBytes := make([]byte, 16)
-	_, _ = rand.Read(keyBytes)
-	return base64.StdEncoding.EncodeToString(keyBytes)
+	return genRandomString(16)
 }
 
 func genMaskKey() []byte {
-	maskKey := make([]byte, 4)
-	_, _ = rand.Read(maskKey)
-	return maskKey
+	return genRandomBytes(4)
 }
 
 func readTill(reader io.Reader, len int) ([]byte, error) {
