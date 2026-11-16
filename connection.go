@@ -1,6 +1,8 @@
 package ws
 
 import (
+	"errors"
+	"log"
 	"net"
 	"sync"
 )
@@ -16,11 +18,11 @@ const (
 )
 
 const (
-	CloseFrameStatusCodeNormal                CloseFrameStatusCode = 1000
-	CloseFrameGoingAway                       CloseFrameStatusCode = 1001
-	CloseFrameStatusCodeProtocolError         CloseFrameStatusCode = 1002
-	CloseFrameStatusCodeMessageLengthOverflow CloseFrameStatusCode = 1009
-	CloseFrameStatusCodeUnexpectedError       CloseFrameStatusCode = 1011
+	CloseFrameStatusCodeNormal          CloseFrameStatusCode = 1000
+	CloseFrameGoingAway                 CloseFrameStatusCode = 1001
+	CloseFrameStatusCodeProtocolError   CloseFrameStatusCode = 1002
+	CloseFrameStatusCodeFrameTooLarge   CloseFrameStatusCode = 1009
+	CloseFrameStatusCodeUnexpectedError CloseFrameStatusCode = 1011
 )
 
 const (
@@ -62,6 +64,10 @@ func (conn *baseConn) readIncomingFrame() (wsframe, error) {
 }
 
 func (conn *baseConn) write(data []byte) error {
+	if conn.state == ConnectionStateClosed || conn.state == ConnectionStateClosing {
+		return errors.New("connection in closing state")
+	}
+
 	conn.writeMu.Lock()
 	defer conn.writeMu.Unlock()
 
@@ -72,36 +78,39 @@ func (conn *baseConn) write(data []byte) error {
 	return nil
 }
 
-func (conn *serverConn) close(reply bool) error {
-	defer func() {
-		conn.setState(ConnectionStateClosed)
-		close(conn.done)
-	}()
+func (conn *serverConn) closeImmediate(statusCode CloseFrameStatusCode) error {
+	if err := conn.initiateClose(statusCode); err != nil {
+		return err
+	}
 
-	closeFrame, err := connectionCloseFrame(CloseFrameStatusCodeNormal, "closed from server")
+	if err := conn.closeDone(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (conn *serverConn) initiateClose(statusCode CloseFrameStatusCode) error {
+	log.Println("initiating close")
+	closeFrame, err := connectionCloseFrame(statusCode, "closed from server")
 
 	if err != nil {
 		return err
 	}
 
 	conn.setState(ConnectionStateClosing)
-	err = conn.write(closeFrame)
 
-	if err != nil {
+	log.Printf("%08b\n", closeFrame)
+	if err = conn.write(closeFrame); err != nil {
 		return err
 	}
 
-	if reply {
-		frame, err := conn.readIncomingFrame()
+	return nil
+}
 
-		if err != nil {
-			return err
-		}
-
-		if ok := frame.isCloseFrame(); !ok {
-			return conn.conn.Close()
-		}
-	}
-
+func (conn *serverConn) closeDone() error {
+	log.Println("close done...")
+	conn.setState(ConnectionStateClosed)
+	close(conn.done)
 	return conn.conn.Close()
 }

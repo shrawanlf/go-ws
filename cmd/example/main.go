@@ -16,9 +16,11 @@ func main() {
 	})
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		log.Println("client connected")
 		openConnections++
-		upgrader := ws.NewUpgrader(ws.UpgraderConfiguration{})
+		upgrader := ws.NewUpgrader(ws.UpgraderConfiguration{
+			PingMaxTries: 3,
+			PingInterval: 30000,
+		})
 		conn, err := upgrader.Upgrade(w, r)
 
 		defer func() {
@@ -51,13 +53,6 @@ func main() {
 				log.Println(err)
 				return
 			}
-
-			// err = conn.Close()
-			//
-			// if err != nil {
-			// 	log.Println("err", err)
-			// 	return
-			// }
 		}
 	})
 

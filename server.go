@@ -2,7 +2,6 @@ package ws
 
 import (
 	"bytes"
-	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -11,15 +10,37 @@ import (
 
 type serverConn struct {
 	*baseConn
+	id         string
 	lastPingId []byte
+	cfg        serverCfg
 }
 
-type UpgraderConfiguration struct{}
+type serverCfg = UpgraderConfiguration
 
-type upgrader struct{}
+type UpgraderConfiguration struct {
+	// max tries to send ping frame to client
+	// defaults to 3
+	PingMaxTries int
+
+	//ping interval in ms
+	PingInterval int
+
+	//
+	MaxPayloadSize int
+}
+
+type upgrader struct {
+	cfg UpgraderConfiguration
+}
 
 func NewUpgrader(conf UpgraderConfiguration) *upgrader {
-	return &upgrader{}
+	if conf.PingMaxTries == 0 {
+		conf.PingMaxTries = 3
+	}
+
+	return &upgrader{
+		cfg: conf,
+	}
 }
 
 func (ws *upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (wsconnection, error) {
@@ -31,7 +52,7 @@ func (ws *upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (wsconnectio
 
 	secureKey := r.Header.Get("Sec-Websocket-Key")
 	if secureKey == "" {
-		return nil, errors.New("")
+		return nil, errorGeneratingSecureKey
 	}
 
 	hash := getAcceptHash(secureKey)
@@ -52,7 +73,15 @@ func (ws *upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (wsconnectio
 		return nil, err
 	}
 
-	serverConnection := &serverConn{baseConn: &baseConn{conn: conn, state: ConnectionStateOpen, done: make(chan struct{})}}
+	serverConnection := &serverConn{
+		cfg: ws.cfg,
+		id:  genRandomString(10),
+		baseConn: &baseConn{
+			conn:  conn,
+			state: ConnectionStateOpen,
+			done:  make(chan struct{}),
+		},
+	}
 
 	go serverConnection.startPing()
 
@@ -85,16 +114,21 @@ func (conn *serverConn) setLastPingId(id []byte) {
 }
 
 func (conn *serverConn) startPing() {
+	tries := 0
+
 	for {
 		select {
 		case <-conn.done:
 			log.Println("closing pinger for this connection")
 			return
 		default:
-			log.Println("starting ping", string(conn.lastPingId))
-			pingId := genRandomString(10)
+			if tries >= conn.cfg.PingMaxTries {
+				log.Println("closing pinger after max tries...")
+				return
+			}
+
+			pingId := genRandomBytes(10)
 			conn.setLastPingId(pingId)
-			log.Println("set ping id")
 			frame, err := prepareFrame(wsframe{
 				fin:         1,
 				rsv1:        0,
@@ -112,21 +146,19 @@ func (conn *serverConn) startPing() {
 			err = conn.write(frame)
 
 			if err != nil {
+				tries++
 				log.Println(err)
-				continue
+			} else {
+				tries = 0
 			}
 
-			time.Sleep(time.Second * 10)
+			time.Sleep(time.Millisecond * time.Duration(conn.cfg.PingInterval))
 		}
 	}
 }
 
-func (conn *serverConn) closeFromClient() error {
-	return conn.close(false)
-}
-
 func (conn *serverConn) Close() error {
-	return conn.close(true)
+	return conn.initiateClose(CloseFrameStatusCodeNormal)
 }
 
 /*
@@ -158,20 +190,30 @@ func (conn *serverConn) ReadMessage() ([]byte, error) {
 
 		if err != nil {
 			log.Println("error raw", err)
-			err := conn.Close()
-			if err != nil {
-				return nil, errors.New("Error in closing connection.")
+			if err := conn.closeImmediate(CloseFrameStatusCodeProtocolError); err != nil {
+				return nil, errorClosingConnection
 			}
-			return nil, errors.New("Error in parsing data.")
+
+			return nil, errorPasingFrame
 		}
 
 		if ok, cf := frame.isControlFrame(); ok {
 			if cf == OpCodeConnectionClose {
 				log.Println("close frame received")
-				err := conn.closeFromClient()
-				if err != nil {
+
+				// connection state Closing means this is a reply from client for our initiated close frame
+				// close done is enough
+				if conn.state == ConnectionStateClosing {
+					if err := conn.closeDone(); err != nil {
+						return nil, &CloseError{Reason: "Error in closing connection."}
+					}
+				}
+
+				// simply initiate close and immediately close the connection on a close frame from client
+				if err := conn.closeImmediate(CloseFrameStatusCodeNormal); err != nil {
 					return nil, &CloseError{Reason: "Error in closing connection."}
 				}
+
 				return nil, &CloseError{Reason: "connection closed from client."}
 			}
 
@@ -180,6 +222,9 @@ func (conn *serverConn) ReadMessage() ([]byte, error) {
 				pingId := frame.payloadData
 				if ok := bytes.Equal(*pingId, conn.lastPingId); !ok {
 					log.Println("invalid ping id received")
+					if err := conn.closeImmediate(CloseFrameStatusCodeProtocolError); err != nil {
+						return nil, errorClosingConnection
+					}
 				}
 
 				log.Println("valid pong id received")

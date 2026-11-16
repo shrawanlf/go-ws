@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
-	"log"
 )
 
 type wsframe struct {
@@ -76,7 +75,7 @@ func connectionCloseFrame(code CloseFrameStatusCode, reason string) ([]byte, err
 
 	frame, err := prepareFrame(wsframe{
 		fin:         1,
-		opCode:      byte(code),
+		opCode:      OpCodeConnectionClose,
 		payloadLen:  len(data),
 		payloadData: &data,
 	})
@@ -203,6 +202,5 @@ func parseIncomingFrame(reader io.Reader) (wsframe, error) {
 
 	maskData(remainingPayload, frame.maskingKey)
 	frame.payloadData = &remainingPayload
-	log.Println("frame", frame)
 	return frame, nil
 }
