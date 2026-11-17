@@ -16,3 +16,6 @@ func (e *CloseError) Error() string {
 var errorClosingConnection = errors.New("error closing connection")
 var errorPasingFrame = errors.New("error in parsing frame")
 var errorGeneratingSecureKey = errors.New("error in generating secure key")
+var errorInvalidLenCode = errors.New("invalid len code received")
+var errorInvalidMaskingKey = errors.New("invalid masking key provided")
+var errorInvalidUtf8Data = errors.New("utf-8 data not received for text frame")

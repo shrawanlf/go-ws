@@ -2,7 +2,6 @@ package ws
 
 import (
 	"encoding/binary"
-	"errors"
 	"io"
 )
 
@@ -21,7 +20,8 @@ type wsframe struct {
 	// length code, denotes if the length of payload data needs more bytes to be read or is sufficient in the provided 7 bit
 	// each length code is mapped based on the payload length
 	payloadLenCode FRAME_LEN_CODE
-	payloadLen     int
+	// calculated from payloadData, if no value provided
+	payloadLen int
 	// the 4 byte masking key is used both to mask/unmask the data
 	maskingKey []byte
 	// the actual application data
@@ -47,8 +47,20 @@ func (frame wsframe) isCloseFrame() bool {
 	return false
 }
 
+func (frame wsframe) isUtf8Data() bool {
+	if frame.opCode == OpCodeText && dataIsUtf8(*frame.payloadData) {
+		return true
+	}
+
+	return false
+}
+
 func (frame wsframe) finalFrame() bool {
 	return frame.fin == 1
+}
+
+func (frame wsframe) isContinuationFrame() bool {
+	return frame.opCode == 0
 }
 
 func (frame wsframe) hasMaskingKey() bool {
@@ -57,7 +69,7 @@ func (frame wsframe) hasMaskingKey() bool {
 
 func (frame wsframe) hasValidMaskingKey() error {
 	if frame.hasMaskingKey() && len(frame.maskingKey) != 4 {
-		return errors.New("invalid masking key provided")
+		return errorInvalidMaskingKey
 	}
 	return nil
 }
@@ -87,6 +99,11 @@ func connectionCloseFrame(code CloseFrameStatusCode, reason string) ([]byte, err
 	return frame, nil
 }
 
+/*
+Prepares byte to write to the connection from the provided frame struct.
+It is the callers responsibility to provide correct frame values.
+See wsframe type for more info.
+*/
 func prepareFrame(frame wsframe) ([]byte, error) {
 	frameLength, payloadDataStartId := getFrameSize(&frame)
 	frameBytes := make([]byte, frameLength)
@@ -126,7 +143,7 @@ func prepareFrame(frame wsframe) ([]byte, error) {
 		binary.BigEndian.PutUint64(frameBytes[2:10], uint64(frame.payloadLen))
 		copy(frameBytes[10:14], frame.maskingKey)
 	default:
-		return nil, errors.New("invalid len code received")
+		return nil, errorInvalidLenCode
 	}
 
 	if frame.hasMaskingKey() {
@@ -139,9 +156,9 @@ func prepareFrame(frame wsframe) ([]byte, error) {
 }
 
 /**
-* Parses the data into a wsInputPayload
- * data: the data to parse in []byte
-*/
+* Parses the data from connection to a frame struct.
+* Returns error if incoming frame is not structured as per RFC-6455.
+ */
 func parseIncomingFrame(reader io.Reader) (wsframe, error) {
 	frame := wsframe{}
 

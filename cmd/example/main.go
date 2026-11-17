@@ -41,7 +41,7 @@ func main() {
 					log.Println(ce.Error())
 					return
 				}
-				log.Println(err)
+				log.Println("err", err)
 				return
 			}
 

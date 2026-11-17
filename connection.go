@@ -63,6 +63,8 @@ func (conn *baseConn) readIncomingFrame() (wsframe, error) {
 	return parseIncomingFrame(conn.conn)
 }
 
+// writes data to the connection only if connection state is open.
+// Returns error if connection state is Closing or Closed
 func (conn *baseConn) write(data []byte) error {
 	if conn.state == ConnectionStateClosed || conn.state == ConnectionStateClosing {
 		return errors.New("connection in closing state")
@@ -78,6 +80,7 @@ func (conn *baseConn) write(data []byte) error {
 	return nil
 }
 
+// Writes close frame to the client and closes TCP connection immediately. Does not wait for a close frame reply.
 func (conn *serverConn) closeImmediate(statusCode CloseFrameStatusCode) error {
 	if err := conn.initiateClose(statusCode); err != nil {
 		return err
@@ -90,17 +93,17 @@ func (conn *serverConn) closeImmediate(statusCode CloseFrameStatusCode) error {
 	return nil
 }
 
+// Initiates a close frame to the client.
+// Performing writes to the connection after initiating close will result in an error.
 func (conn *serverConn) initiateClose(statusCode CloseFrameStatusCode) error {
 	log.Println("initiating close")
+	defer conn.setState(ConnectionStateClosing)
 	closeFrame, err := connectionCloseFrame(statusCode, "closed from server")
 
 	if err != nil {
 		return err
 	}
 
-	conn.setState(ConnectionStateClosing)
-
-	log.Printf("%08b\n", closeFrame)
 	if err = conn.write(closeFrame); err != nil {
 		return err
 	}
@@ -108,6 +111,7 @@ func (conn *serverConn) initiateClose(statusCode CloseFrameStatusCode) error {
 	return nil
 }
 
+// Closes the TCP connection and all go-routines spawned by this connection.
 func (conn *serverConn) closeDone() error {
 	log.Println("close done...")
 	conn.setState(ConnectionStateClosed)

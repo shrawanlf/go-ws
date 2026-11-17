@@ -2,6 +2,8 @@ package ws
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -10,9 +12,10 @@ import (
 
 type serverConn struct {
 	*baseConn
-	id         string
-	lastPingId []byte
-	cfg        serverCfg
+	id                      string
+	lastPingId              []byte
+	cfg                     serverCfg
+	continuationFrameOpcode byte
 }
 
 type serverCfg = UpgraderConfiguration
@@ -176,7 +179,6 @@ func (conn *serverConn) ReadMessage() ([]byte, error) {
 
 	for {
 		if fin {
-			log.Println("yup fin")
 			return dataBuf.Bytes(), nil
 		}
 
@@ -189,12 +191,20 @@ func (conn *serverConn) ReadMessage() ([]byte, error) {
 		frame, err := conn.readIncomingFrame()
 
 		if err != nil {
-			log.Println("error raw", err)
+			// log.Println("error raw", err)
 			if err := conn.closeImmediate(CloseFrameStatusCodeProtocolError); err != nil {
 				return nil, errorClosingConnection
 			}
 
+			if errors.Is(err, io.EOF) {
+				return nil, err
+			}
+
 			return nil, errorPasingFrame
+		}
+
+		if !frame.isUtf8Data() {
+			return nil, errorInvalidUtf8Data
 		}
 
 		if ok, cf := frame.isControlFrame(); ok {
@@ -237,6 +247,10 @@ func (conn *serverConn) ReadMessage() ([]byte, error) {
 				}
 				continue
 			}
+		}
+
+		if frame.isContinuationFrame() && conn.continuationFrameOpcode == 0 {
+			conn.continuationFrameOpcode = 1
 		}
 
 		fin = frame.finalFrame()

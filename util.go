@@ -6,7 +6,12 @@ import (
 	"encoding/base64"
 	"io"
 	"net/http"
+	"unicode/utf8"
 )
+
+func dataIsUtf8(data []byte) bool {
+	return utf8.Valid(data)
+}
 
 func respHasHeaderWithValue(resp *http.Response, key string, value string) bool {
 	val := resp.Header.Get(key)
